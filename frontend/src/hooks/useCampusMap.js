@@ -13,6 +13,22 @@ const apiFetch = async (url, options = {}) => {
 };
 
 const ensureArray = (value) => (Array.isArray(value) ? value : []);
+const STORAGE_KEY = "campus_places_data";
+
+const defaultCampusPlaces = [
+  {
+    id: "seed-building-f",
+    name: "Building F at the Faculty of Engineering",
+    name_ar: "مبنى F - كلية الهندسة",
+    building_code: "F",
+    category: "faculties",
+    icon_key: "faculties",
+    latitude: 30.248717,
+    longitude: 31.455538,
+    description: "Building F at the Faculty of Engineering used for classrooms, offices, or academic services.",
+    description_ar: "مبنى F التابع لكلية الهندسة ويستخدم للقاعات أو المكاتب أو الخدمات الأكاديمية داخل الكلية",
+  },
+];
 
 export const campusPlacesApi = {
   async list(category = "") {
@@ -47,9 +63,12 @@ export function useCampusMap() {
   const fetchPlaces = () => {
     setIsLoading(true);
     try {
-      const saved = localStorage.getItem("campus_places_data");
+      const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         setPlaces(JSON.parse(saved));
+      } else {
+        setPlaces(defaultCampusPlaces);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultCampusPlaces));
       }
     } catch (err) {
       console.error("Failed to parse local places", err);
@@ -78,7 +97,7 @@ export function useCampusMap() {
     
     const newPlaces = [...places, payload];
     setPlaces(newPlaces);
-    localStorage.setItem("campus_places_data", JSON.stringify(newPlaces));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newPlaces));
   };
 
   const updatePlace = (id, updatedData) => {
@@ -96,18 +115,18 @@ export function useCampusMap() {
     };
     const newPlaces = places.map((p) => (p.id === id ? payload : p));
     setPlaces(newPlaces);
-    localStorage.setItem("campus_places_data", JSON.stringify(newPlaces));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newPlaces));
   };
 
   const deletePlace = (id) => {
     const newPlaces = places.filter((p) => p.id !== id);
     setPlaces(newPlaces);
-    localStorage.setItem("campus_places_data", JSON.stringify(newPlaces));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newPlaces));
   };
 
   const importFromJson = (jsonData) => {
     setPlaces(jsonData);
-    localStorage.setItem("campus_places_data", JSON.stringify(jsonData));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(jsonData));
   };
 
   return { places, isLoading, addPlace, updatePlace, deletePlace, fetchPlaces, importFromJson };
