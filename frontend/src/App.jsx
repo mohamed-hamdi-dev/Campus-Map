@@ -62,7 +62,7 @@ function Shell({ children }) {
       <main
         className={[
           "relative z-0 mx-auto",
-          isMapping ? "w-full p-0 md:max-w-6xl md:px-4 md:py-8 lg:px-8" : "px-4 py-8 sm:px-6 lg:px-8",
+          isMapping ? "w-full p-0 md:px-4 md:py-8 lg:px-8" : "px-4 py-8 sm:px-6 lg:px-8",
           isAdmin ? "w-full max-w-[1600px]" : "",
           !isAdmin && !isMapping ? "max-w-6xl" : "",
         ].join(" ")}

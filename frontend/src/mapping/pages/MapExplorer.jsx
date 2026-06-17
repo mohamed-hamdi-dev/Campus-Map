@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  BookOpen,
   Briefcase,
   Building2,
   Car,
@@ -10,6 +9,7 @@ import {
   GraduationCap,
   Layers3,
   Library,
+  LayoutTemplate,
   LocateFixed,
   MapPin,
   Route,
@@ -68,14 +68,43 @@ function getPlacePosition(place) {
 }
 
 function getPlaceKind(place) {
-  const key = `${place?.icon_key || ""} ${place?.category || ""}`.toLowerCase();
+  const iconKey = String(place?.icon_key || "").toLowerCase();
+  const categoryKey = String(place?.category || "").toLowerCase();
+  const textKey = [
+    place?.name,
+    place?.name_ar,
+    place?.description,
+    place?.description_ar,
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  const key = `${iconKey} ${categoryKey}`;
+
+  if (
+    categoryKey.includes("facult") ||
+    categoryKey.includes("college") ||
+    categoryKey.includes("كلية") ||
+    categoryKey.includes("كليات") ||
+    textKey.includes("faculty") ||
+    textKey.includes("college") ||
+    textKey.includes("كلية") ||
+    textKey.includes("كليات")
+  ) {
+    return { label: "كلية", Icon: GraduationCap };
+  }
+  if (categoryKey.includes("service") || categoryKey.includes("خدمة")) return { label: "خدمة", Icon: Briefcase };
+  if (categoryKey.includes("admin") || categoryKey.includes("administration") || categoryKey.includes("إدارة")) {
+    return { label: "إدارة", Icon: Building2 };
+  }
+  if (categoryKey.includes("facilit") || categoryKey.includes("مرفق")) return { label: "مرفق", Icon: LayoutTemplate };
+  if (categoryKey.includes("gate") || categoryKey.includes("بوابة")) return { label: "بوابة", Icon: MapPin };
 
   if (key.includes("gate") || key.includes("بوابة")) return { label: "بوابة", Icon: MapPin };
   if (key.includes("admin") || key.includes("administration") || key.includes("إدارة")) {
     return { label: "إدارة", Icon: Building2 };
   }
   if (key.includes("librar") || key.includes("مكتبة")) return { label: "مكتبة", Icon: Library };
-  if (key.includes("facilit") || key.includes("مرفق")) return { label: "مرفق", Icon: BookOpen };
+  if (key.includes("facilit") || key.includes("مرفق")) return { label: "مرفق", Icon: LayoutTemplate };
   if (key.includes("facult") || key.includes("college") || key.includes("كلية")) {
     return { label: "كلية", Icon: GraduationCap };
   }
@@ -170,6 +199,9 @@ export default function MapExplorer() {
   const navigationPlacePosition = useMemo(() => getPlacePosition(navigationPlace), [navigationPlace]);
   const activePlaceMeta = activePlace ? getPlaceKind(activePlace) : null;
   const activePlaceMetrics = activePlace ? getPlaceMetrics(activePlace) : null;
+  const activePlaceDescription = activePlace
+    ? activePlace.description_ar || activePlace.description || ""
+    : "";
   const navigationPlaceMeta = navigationPlace ? getPlaceKind(navigationPlace) : null;
   const navigationModeLabel = travelModes.find((mode) => mode.value === travelMode)?.label || "مشي";
 
@@ -408,16 +440,50 @@ export default function MapExplorer() {
           .mapDetailsSheet {
             will-change: transform, opacity;
           }
+          .mapFloatingControls {
+            left: auto;
+            right: 1rem;
+          }
           .mappingPreviewMobile .mapDetailsSheet {
             left: 0;
             right: 0;
-            bottom: 10px;
+            bottom: 0;
             width: auto;
             max-width: none;
             margin-left: 0;
             margin-right: 0;
             border-bottom-left-radius: 0;
             border-bottom-right-radius: 0;
+          }
+          .mappingPreviewMobile .detailsActions {
+            width: 100%;
+            max-width: none;
+            margin-left: 0;
+            grid-template-columns: 1fr auto;
+            justify-content: stretch;
+          }
+          .mappingPreviewMobile .travelModesGroup {
+            grid-column: 1 / -1;
+            margin-left: auto;
+          }
+          .mappingPreviewMobile .routeButton {
+            width: 100%;
+            min-width: 0;
+          }
+          .mappingPreviewTablet .detailsActions,
+          .mappingPreviewMobile .detailsActions {
+            margin-left: 0;
+            margin-right: 0;
+            max-width: none;
+            justify-content: stretch;
+          }
+          .mappingPreviewTablet .mapDetailsSheet {
+            max-width: 520px;
+            width: calc(100% - 120px);
+          }
+          .mappingPreviewTablet .routeButton {
+            min-width: 260px;
+            justify-content: flex-start;
           }
           .mapSheetOpening {
             animation: mapSheetUp 240ms cubic-bezier(.2,.85,.24,1) both;
@@ -623,7 +689,7 @@ export default function MapExplorer() {
         </div>
       ) : null}
 
-      <div className="absolute bottom-6 left-4 z-[410] flex flex-col gap-2">
+      <div className="mapFloatingControls absolute bottom-6 z-[410] flex flex-col gap-2">
         <button
           type="button"
           onClick={() => setMapType((value) => (value === "street" ? "satellite" : "street"))}
@@ -663,18 +729,18 @@ export default function MapExplorer() {
             type="button"
             onClick={closeDetails}
             aria-label="إغلاق التفاصيل"
-            className="absolute left-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:bg-slate-50 hover:text-slate-800"
+            className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:bg-slate-50 hover:text-slate-800"
           >
             <X size={18} />
           </button>
 
-          <div className="mt-3 flex items-start gap-3 pl-11 md:mt-2">
+          <div className="mt-3 flex items-start gap-3 pr-11 md:mt-2">
             <div className="min-w-0 flex-1">
               <div className="inline-flex items-center rounded-full bg-sky-50 px-2.5 py-1 text-[10px] font-black text-sky-700 md:text-[10px]">
                 {activePlaceMetrics?.distanceLabel || "250 م"}
               </div>
 
-              <h2 className="mt-2 text-[20px] font-black leading-tight text-slate-950 md:text-[18px]">
+              <h2 className="mt-2 text-[17px] font-black leading-tight text-slate-950 md:text-[15px]">
                 {activePlace.name_ar || activePlace.name}
               </h2>
 
@@ -682,11 +748,17 @@ export default function MapExplorer() {
                 {activePlaceMeta?.label || "مكان"} <span className="px-1 text-slate-300">•</span>{" "}
                 {activePlaceMetrics?.timeLabel || "يبعد 4 دقائق مشيًا"}
               </p>
+
+              {activePlaceDescription ? (
+                <p className="mt-2 line-clamp-2 text-[10.5px] font-bold leading-relaxed text-slate-500 md:text-[10px]">
+                  {activePlaceDescription}
+                </p>
+              ) : null}
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-[1fr_auto] gap-3 md:ml-auto md:max-w-[380px] md:grid-cols-[auto_auto] md:justify-end">
-            <div className="col-span-2 ml-auto inline-grid grid-cols-2 gap-1 rounded-2xl bg-slate-100 p-1">
+          <div className="detailsActions mt-4 grid grid-cols-[1fr_auto] gap-3 md:grid-cols-[1fr_auto]">
+            <div className="travelModesGroup col-span-2 ml-auto inline-grid grid-cols-2 gap-1 rounded-2xl bg-slate-100 p-1">
               {travelModes.map(({ label, value, Icon }) => {
                 const active = travelMode === value;
 
@@ -712,10 +784,11 @@ export default function MapExplorer() {
             <button
               type="button"
               onClick={() => startNavigation(activePlace)}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-[18px] bg-[#0F172A] px-4 text-[14px] font-black text-white shadow-[0_14px_28px_rgba(15,23,42,0.2)] transition hover:bg-[#020617] md:min-w-[172px] md:text-[13px]"
+              dir="rtl"
+              className="routeButton inline-flex h-11 items-center justify-start gap-2 rounded-[18px] bg-[#0F172A] px-4 text-[14px] font-black text-white shadow-[0_14px_28px_rgba(15,23,42,0.2)] transition hover:bg-[#020617] md:min-w-[172px] md:text-[13px]"
             >
               <Route size={18} />
-              اتجه إليها
+              <span>اتجه إليها</span>
             </button>
 
             <button
