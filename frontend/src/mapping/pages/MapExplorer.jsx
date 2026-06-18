@@ -40,12 +40,12 @@ const travelModes = [
   { label: "سيارة", value: "driving", Icon: Car },
 ];
 
-function MapUpdater({ center }) {
+function MapUpdater({ center, zoom }) {
   const map = useMap();
 
   useEffect(() => {
-    map.setView(center, map.getZoom(), { animate: true });
-  }, [center, map]);
+    map.setView(center, zoom || map.getZoom(), { animate: true });
+  }, [center, map, zoom]);
 
   return null;
 }
@@ -124,6 +124,17 @@ function getPlaceMetrics(place) {
   };
 }
 
+function formatRouteDistance(meters) {
+  if (!Number.isFinite(meters)) return "";
+  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} كم` : `${Math.round(meters)} م`;
+}
+
+function formatRouteDuration(seconds) {
+  if (!Number.isFinite(seconds)) return "";
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return minutes >= 60 ? `${Math.floor(minutes / 60)} س ${minutes % 60} د` : `${minutes} د`;
+}
+
 function createPlaceIcon(place, selected = false) {
   const { Icon } = getPlaceKind(place);
   const svg = renderToStaticMarkup(<Icon size={16} strokeWidth={2.4} />);
@@ -162,13 +173,16 @@ export default function MapExplorer() {
   const [navigationPlace, setNavigationPlace] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [customCenter, setCustomCenter] = useState(null);
+  const [customZoom, setCustomZoom] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
-  const [mapType, setMapType] = useState("street");
+  const [mapType, setMapType] = useState("satellite");
   const [placesPanelOpen, setPlacesPanelOpen] = useState(false);
   const [searchBoxFocused, setSearchBoxFocused] = useState(false);
   const [travelMode, setTravelMode] = useState("walking");
-  const [routePath, setRoutePath] = useState(null);
+  const [routeOptions, setRouteOptions] = useState([]);
+  const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [routeStatus, setRouteStatus] = useState("idle");
+  const [navigationPanelHidden, setNavigationPanelHidden] = useState(false);
   const [detailsSheetClosing, setDetailsSheetClosing] = useState(false);
 
   const defaultCenter = [30.4726, 31.1847];
@@ -191,6 +205,7 @@ export default function MapExplorer() {
   const mapCenter =
     customCenter ||
     getPlacePosition(activePlace) ||
+    userLocation ||
     mappablePlaces.map(getPlacePosition).find(Boolean) ||
     places.map(getPlacePosition).find(Boolean) ||
     defaultCenter;
@@ -199,11 +214,23 @@ export default function MapExplorer() {
   const navigationPlacePosition = useMemo(() => getPlacePosition(navigationPlace), [navigationPlace]);
   const activePlaceMeta = activePlace ? getPlaceKind(activePlace) : null;
   const activePlaceMetrics = activePlace ? getPlaceMetrics(activePlace) : null;
+  const activePlaceTravelLabel =
+    activePlaceMetrics?.timeLabel && travelMode === "driving"
+      ? activePlaceMetrics.timeLabel.replace("مشيًا", "بالسيارة")
+      : activePlaceMetrics?.timeLabel;
   const activePlaceDescription = activePlace
     ? activePlace.description_ar || activePlace.description || ""
     : "";
   const navigationPlaceMeta = navigationPlace ? getPlaceKind(navigationPlace) : null;
   const navigationModeLabel = travelModes.find((mode) => mode.value === travelMode)?.label || "مشي";
+  const selectedRoute = routeOptions[selectedRouteIndex] || null;
+  const routePath = selectedRoute?.path || null;
+  const routeMetrics = selectedRoute
+    ? { distance: selectedRoute.distance, duration: selectedRoute.duration }
+    : null;
+  const routeSummary = routeMetrics
+    ? `${formatRouteDistance(routeMetrics.distance)} • ${formatRouteDuration(routeMetrics.duration)} ${navigationModeLabel}`
+    : "";
 
   useEffect(() => {
     if (hasSearchQuery) {
@@ -217,8 +244,23 @@ export default function MapExplorer() {
   }, [hasSearchQuery, searchBoxFocused]);
 
   useEffect(() => {
+    if (!navigator.geolocation) return;
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const nextPosition = [position.coords.latitude, position.coords.longitude];
+        setUserLocation(nextPosition);
+        setCustomCenter(nextPosition);
+        setCustomZoom(19);
+      },
+      () => {}
+    );
+  }, []);
+
+  useEffect(() => {
     if (!userLocation || !navigationPlacePosition) {
-      setRoutePath(null);
+      setRouteOptions([]);
+      setSelectedRouteIndex(0);
       setRouteStatus("idle");
       return;
     }
@@ -226,7 +268,7 @@ export default function MapExplorer() {
     const controller = new AbortController();
     const profile = travelMode === "driving" ? "driving" : "foot";
     const coordinates = `${userLocation[1]},${userLocation[0]};${navigationPlacePosition[1]},${navigationPlacePosition[0]}`;
-    const routeUrl = `https://router.project-osrm.org/route/v1/${profile}/${coordinates}?overview=full&geometries=geojson`;
+    const routeUrl = `https://router.project-osrm.org/route/v1/${profile}/${coordinates}?overview=full&geometries=geojson&alternatives=true&steps=true`;
 
     async function loadRoute() {
       setRouteStatus("loading");
@@ -236,16 +278,34 @@ export default function MapExplorer() {
         if (!response.ok) throw new Error("Route request failed");
 
         const data = await response.json();
-        const routeCoordinates = data?.routes?.[0]?.geometry?.coordinates;
-        if (!Array.isArray(routeCoordinates) || routeCoordinates.length < 2) {
+        const routes = Array.isArray(data?.routes) ? data.routes : [];
+        const nextRouteOptions = routes
+          .slice(0, 3)
+          .map((route, index) => {
+            const routeCoordinates = route?.geometry?.coordinates;
+            if (!Array.isArray(routeCoordinates) || routeCoordinates.length < 2) return null;
+
+            return {
+              id: `${Math.round(Number(route.distance) || 0)}-${Math.round(Number(route.duration) || 0)}-${index}`,
+              label: `طريق ${index + 1}`,
+              distance: Number(route.distance),
+              duration: Number(route.duration),
+              path: routeCoordinates.map(([lng, lat]) => [lat, lng]),
+            };
+          })
+          .filter(Boolean);
+
+        if (!nextRouteOptions.length) {
           throw new Error("No route found");
         }
 
-        setRoutePath(routeCoordinates.map(([lng, lat]) => [lat, lng]));
+        setRouteOptions(nextRouteOptions);
+        setSelectedRouteIndex(0);
         setRouteStatus("ready");
       } catch (error) {
         if (error.name === "AbortError") return;
-        setRoutePath(null);
+        setRouteOptions([]);
+        setSelectedRouteIndex(0);
         setRouteStatus("error");
       }
     }
@@ -260,7 +320,11 @@ export default function MapExplorer() {
     setPlacesPanelOpen(false);
     setActivePlace(place);
     setNavigationPlace(null);
-    if (position) setCustomCenter(position);
+    setNavigationPanelHidden(false);
+    if (position) {
+      setCustomCenter(position);
+      setCustomZoom(17);
+    }
   };
 
   const closeDetails = () => {
@@ -283,6 +347,7 @@ export default function MapExplorer() {
         const nextPosition = [position.coords.latitude, position.coords.longitude];
         setUserLocation(nextPosition);
         setCustomCenter(nextPosition);
+        setCustomZoom(19);
         if (typeof onLocated === "function") onLocated(nextPosition);
       },
       () => {
@@ -299,15 +364,19 @@ export default function MapExplorer() {
     if (!userLocation) {
       handleLocateMe((nextPosition) => {
         setNavigationPlace(place);
+        setNavigationPanelHidden(false);
         setActivePlace(null);
         setCustomCenter(nextPosition);
+        setCustomZoom(17);
       });
       return;
     }
 
     setNavigationPlace(place);
+    setNavigationPanelHidden(false);
     setActivePlace(null);
     setCustomCenter(userLocation);
+    setCustomZoom(17);
   };
 
   return (
@@ -443,6 +512,60 @@ export default function MapExplorer() {
           .mapFloatingControls {
             left: auto;
             right: 1rem;
+            z-index: 440;
+          }
+          .liquidGlassButton {
+            position: relative;
+            overflow: hidden;
+            isolation: isolate;
+            border: 1px solid rgba(255, 255, 255, 0.78);
+            color: #0369a1;
+            background:
+              linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.58)),
+              rgba(255, 255, 255, 0.62);
+            box-shadow:
+              0 18px 38px rgba(15, 23, 42, 0.13),
+              inset 0 1px 0 rgba(255, 255, 255, 0.88),
+              inset 0 -14px 28px rgba(255, 255, 255, 0.28);
+            backdrop-filter: blur(18px) saturate(1.35);
+            -webkit-backdrop-filter: blur(18px) saturate(1.35);
+          }
+          .liquidGlassButton::before {
+            content: "";
+            position: absolute;
+            inset: 1px;
+            z-index: 0;
+            border-radius: inherit;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.12) 42%, rgba(14, 165, 233, 0.12));
+          }
+          .liquidGlassButton::after {
+            content: "";
+            position: absolute;
+            top: 7px;
+            left: 11px;
+            width: 42%;
+            height: 28%;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.72);
+            filter: blur(5px);
+            opacity: 0.85;
+            pointer-events: none;
+            z-index: 0;
+          }
+          .liquidGlassButton > svg,
+          .liquidGlassButton > span {
+            position: relative;
+            z-index: 1;
+          }
+          .liquidGlassButton:hover {
+            border-color: rgba(186, 230, 253, 0.92);
+            background:
+              linear-gradient(145deg, rgba(255, 255, 255, 0.84), rgba(240, 249, 255, 0.52)),
+              rgba(255, 255, 255, 0.46);
+            box-shadow:
+              0 20px 42px rgba(2, 132, 199, 0.16),
+              inset 0 1px 0 rgba(255, 255, 255, 0.92),
+              inset 0 -14px 28px rgba(255, 255, 255, 0.34);
           }
           .mappingPreviewMobile .mapDetailsSheet {
             left: 0;
@@ -484,6 +607,11 @@ export default function MapExplorer() {
           .mappingPreviewTablet .routeButton {
             min-width: 260px;
             justify-content: flex-start;
+          }
+          .routeOptionChip {
+            white-space: normal;
+            text-align: center;
+            line-height: 1.45;
           }
           .mapSheetOpening {
             animation: mapSheetUp 240ms cubic-bezier(.2,.85,.24,1) both;
@@ -531,8 +659,26 @@ export default function MapExplorer() {
             />
           )}
 
-          <MapUpdater center={mapCenter} />
+          <MapUpdater center={mapCenter} zoom={customZoom} />
           <RouteBoundsUpdater routePath={routePath} />
+
+          {routeOptions
+            .map((route, index) => ({ route, index }))
+            .filter(({ index }) => index !== selectedRouteIndex)
+            .map(({ route, index }) => (
+              <Polyline
+                key={`route-alt-${route.id}`}
+                positions={route.path}
+                eventHandlers={{ click: () => setSelectedRouteIndex(index) }}
+                pathOptions={{
+                  color: "#38BDF8",
+                  weight: 5,
+                  opacity: 0.34,
+                  lineCap: "round",
+                  lineJoin: "round",
+                }}
+              />
+            ))}
 
           {routePath ? (
             <>
@@ -689,11 +835,21 @@ export default function MapExplorer() {
         </div>
       ) : null}
 
-      <div className="mapFloatingControls absolute bottom-6 z-[410] flex flex-col gap-2">
+      <div
+        className={[
+          "mapFloatingControls absolute bottom-6 flex flex-col gap-2 transition duration-200",
+          activePlace || navigationPlace
+            ? "z-[0] translate-x-6 opacity-0 pointer-events-none"
+            : "z-[410] translate-x-0 opacity-100",
+        ].join(" ")}
+      >
         <button
           type="button"
           onClick={() => setMapType((value) => (value === "street" ? "satellite" : "street"))}
-          className="inline-flex h-11 w-11 items-center justify-center rounded-[18px] border border-slate-800/20 bg-white/90 text-sky-700 shadow-[0_14px_30px_rgba(15,23,42,0.16)] backdrop-blur-md transition hover:border-sky-300 hover:bg-sky-50"
+          className={[
+            "liquidGlassButton inline-flex h-11 w-11 items-center justify-center rounded-[18px] text-sky-700 transition",
+            mapType === "satellite" ? "ring-2 ring-sky-300 shadow-[0_18px_38px_rgba(2,132,199,0.18)]" : "",
+          ].join(" ")}
           title="طبقات الخريطة"
         >
           <Layers3 size={19} className={mapType === "satellite" ? "text-sky-700" : "text-slate-700"} />
@@ -702,7 +858,7 @@ export default function MapExplorer() {
         <button
           type="button"
           onClick={handleLocateMe}
-          className="inline-flex h-11 w-11 items-center justify-center rounded-[18px] border border-slate-800/20 bg-white/90 text-sky-700 shadow-[0_14px_30px_rgba(15,23,42,0.16)] backdrop-blur-md transition hover:border-sky-300 hover:bg-sky-50"
+          className="liquidGlassButton inline-flex h-11 w-11 items-center justify-center rounded-[18px] text-sky-700 transition"
           title="موقعي"
         >
           <LocateFixed size={19} />
@@ -716,6 +872,7 @@ export default function MapExplorer() {
             detailsSheetClosing ? "mapSheetClosing" : "mapSheetOpening",
           ].join(" ")}
         >
+
           <button
             type="button"
             onClick={closeDetails}
@@ -746,7 +903,7 @@ export default function MapExplorer() {
 
               <p className="mt-1 text-[12px] font-bold text-slate-500 md:text-[11px]">
                 {activePlaceMeta?.label || "مكان"} <span className="px-1 text-slate-300">•</span>{" "}
-                {activePlaceMetrics?.timeLabel || "يبعد 4 دقائق مشيًا"}
+                {activePlaceTravelLabel || "يبعد 4 دقائق مشيًا"}
               </p>
 
               {activePlaceDescription ? (
@@ -806,7 +963,18 @@ export default function MapExplorer() {
         </div>
       ) : null}
 
-      {!activePlace && navigationPlace ? (
+      {!activePlace && navigationPlace && navigationPanelHidden ? (
+        <button
+          type="button"
+          onClick={() => setNavigationPanelHidden(false)}
+          className="liquidGlassButton absolute bottom-8 left-4 z-[430] inline-flex h-10 min-w-[142px] items-center justify-center gap-2 rounded-full px-5 text-[12px] font-black text-sky-700 transition"
+        >
+          <Route size={16} />
+          عرض الاتجاه
+        </button>
+      ) : null}
+
+      {!activePlace && navigationPlace && !navigationPanelHidden ? (
         <div className="absolute inset-x-6 bottom-4 z-[430] rounded-[24px] border border-white/90 bg-white/95 p-3.5 shadow-[0_-12px_34px_rgba(15,23,42,0.14)] backdrop-blur-xl">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -816,7 +984,7 @@ export default function MapExplorer() {
               </h3>
               <p className="mt-0.5 text-[11px] font-bold text-slate-500">
                 {navigationPlaceMeta?.label || "مكان"} <span className="px-1 text-slate-300">•</span>{" "}
-                {navigationModeLabel}
+                {routeSummary || navigationModeLabel}
               </p>
               <p
                 className={[
@@ -827,7 +995,7 @@ export default function MapExplorer() {
                 {routeStatus === "loading"
                   ? "جاري حساب المسار على الطرق..."
                   : routeStatus === "ready"
-                    ? "المسار مرسوم على الطرق"
+                    ? `المسار مرسوم على الطرق • ${routeSummary}`
                     : routeStatus === "error"
                       ? "تعذر حساب المسار على الطرق الآن"
                       : "سيظهر المسار بعد تحديد موقعك"}
@@ -836,21 +1004,50 @@ export default function MapExplorer() {
 
             <button
               type="button"
-              onClick={() => setNavigationPlace(null)}
-              aria-label="إيقاف الاتجاه"
+              onClick={() => setNavigationPanelHidden(true)}
+              aria-label="إخفاء لوحة الاتجاه"
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition hover:bg-slate-200 hover:text-slate-800"
             >
               <X size={18} />
             </button>
           </div>
 
+          {routeOptions.length > 1 ? (
+            <div className="mt-3 flex flex-wrap gap-2 overflow-visible">
+              {routeOptions.map((route, index) => {
+                const selected = index === selectedRouteIndex;
+
+                return (
+                  <button
+                    key={route.id}
+                    type="button"
+                    onClick={() => setSelectedRouteIndex(index)}
+                    className={[
+                      "routeOptionChip min-w-0 flex-1 basis-[calc(50%-0.25rem)] rounded-full border px-3 py-1.5 text-[11px] font-black transition",
+                      selected
+                        ? "border-sky-300 bg-sky-50 text-sky-700 shadow-[0_8px_18px_rgba(2,132,199,0.12)]"
+                        : "border-slate-200 bg-white/70 text-slate-500 hover:border-sky-200 hover:text-sky-700",
+                    ].join(" ")}
+                  >
+                    {route.label} - {formatRouteDistance(route.distance)} - {formatRouteDuration(route.duration)}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
+
           <button
             type="button"
             onClick={() => {
               setActivePlace(navigationPlace);
               setNavigationPlace(null);
+              setNavigationPanelHidden(false);
               const position = getPlacePosition(navigationPlace);
-              if (position) setCustomCenter(position);
+              if (position) {
+                setCustomCenter(position);
+                setCustomZoom(17);
+              }
             }}
             className="mt-2.5 inline-flex h-10 w-full items-center justify-center rounded-[16px] bg-[#0F172A] text-[13px] font-black text-white transition hover:bg-[#020617]"
           >
